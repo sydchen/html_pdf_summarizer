@@ -1,0 +1,9 @@
+beautifulsoup4==4.13.4
+httpx==0.28.1
+nest_asyncio==1.6.0
+ollama==0.5.3
+PyPDF2==3.0.1
+python-dotenv==1.1.1
+Requests==2.32.4
+streamlit==1.46.0
+transformers==4.53.3
