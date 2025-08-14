@@ -5,15 +5,12 @@ import os
 import PyPDF2
 from typing import List, Dict, Generator, Optional
 from bs4 import BeautifulSoup
-from transformers import AutoTokenizer
 from urllib.parse import urlparse
 from llm import DocumentSummarizer
 
 class WebArticleSummarizer:
     def __init__(self,
-                 model: str = "gemma3:4b",
                  token_limit: int = 3000,
-                 tokenizer_name: str = "google/gemma-2b",
                  overlap_ratio: float = 0.1):
         """
         初始化網頁文章摘要器（支援 HTML 和 PDF）
@@ -21,14 +18,11 @@ class WebArticleSummarizer:
         Args:
             model: Ollama 模型名稱
             token_limit: Token 數量限制
-            tokenizer_name: Tokenizer 模型名稱
             overlap_ratio: 切分時的重疊比例
         """
-        self.model = model
         self.token_limit = token_limit
         self.overlap_ratio = overlap_ratio
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        self.summarizer = DocumentSummarizer(model_name=model)
+        self.summarizer = DocumentSummarizer()
 
         # 根據不同任務類型調整建議值
         self.recommended_limits = {
@@ -208,12 +202,9 @@ class WebArticleSummarizer:
         return asyncio.run(self.fetch_content(url, is_pdf))
 
     def count_tokens(self, text: str) -> int:
-        """計算文字的 token 數量"""
-        try:
-            return len(self.tokenizer.encode(text))
-        except Exception as e:
-            print(f"Token 計算錯誤: {e}")
-            return len(text) // 4
+        """計算文字的 token 數量（使用字符估算）"""
+        # 這裡使用保守估計：3 字符 = 1 token
+        return len(text) // 3
 
     def count_tokens_batch(self, texts: List[str]) -> int:
         """計算文字列表的總 token 數"""
