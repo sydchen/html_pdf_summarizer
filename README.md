@@ -46,10 +46,10 @@ Install Ollama - MacOS/Linux
 curl -fsSL https://ollama.com/install.sh | sh
 ```
 
-Download Gemma 3 Model
+### Start Ollama and download Gemma 3 Model
 
 ```bash
-ollama pull gemma3:4b
+ollama serve & ollama pull gemma3:4b
 ```
 
 ### Start the Frontend (Streamlit)
