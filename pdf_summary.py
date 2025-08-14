@@ -85,9 +85,6 @@ class PDFSummarizer:
         return chunks
 
     def summarize_chunk(self, chunk: str) -> str:
-        """
-        對單個文字塊進行摘要
-        """
         try:
             summary = self.summarizer.summarize_content(chunk)
             return summary if summary else ""

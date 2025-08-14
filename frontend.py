@@ -29,33 +29,6 @@ if "is_processing" not in st.session_state:
 if "summary_type" not in st.session_state:
     st.session_state.summary_type = None  # "pdf" 或 "url"
 
-def run_async_safely(coro):
-    """安全地運行異步函數"""
-    try:
-        # 檢查是否已有事件循環
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # 如果循環正在運行，創建新的循環
-            import nest_asyncio
-            nest_asyncio.apply()
-            return asyncio.run(coro)
-        else:
-            return loop.run_until_complete(coro)
-    except RuntimeError:
-        # 沒有事件循環，創建新的
-        return asyncio.run(coro)
-    except ImportError:
-        # 沒有 nest_asyncio，使用 run_until_complete
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                return loop.run_until_complete(coro)
-            finally:
-                loop.close()
-        except Exception as e:
-            st.error(f"異步執行失敗: {e}")
-            return None
 
 def stream_summary(generator, status_container, result_placeholder=None):
     summary_text = ""
@@ -78,34 +51,21 @@ def stream_summary(generator, status_container, result_placeholder=None):
 def process_url_with_fallback(url):
     """處理 URL 摘要，包含容錯機制"""
     try:
-        # 首先嘗試同步方式
+        # 嘗試標準摘要流程
         for chunk in web_summarizer.get_summary(url):
             yield chunk
     except Exception as e:
-        logging.error(f"Generator approach failed: {e}")
+        logging.error(f"Standard summary failed: {e}")
         try:
-            # 備用方案：嘗試異步方式
-            async def async_summary():
-                summary = ""
-                async for chunk in web_summarizer.get_summary_async(url):
-                    summary += chunk
-                    yield chunk
-
-            # 如果有異步方法，使用它
-            if hasattr(web_summarizer, 'get_summary_async'):
-                result = run_async_safely(async_summary())
-                if result:
-                    yield result
+            # 備用方案：手動獲取內容並生成簡化摘要
+            is_pdf = web_summarizer.detect_content_type(url)
+            content = web_summarizer.fetch_content_sync(url, is_pdf)
+            if content:
+                yield "正在生成摘要..."
+                summary = web_summarizer.generate_simple_summary(content)
+                yield summary
             else:
-                # 最後備用：直接調用同步版本
-                is_pdf = web_summarizer.detect_content_type(url)
-                content = web_summarizer.fetch_content_sync(url, is_pdf)
-                if content:
-                    # 簡化版摘要生成
-                    yield "正在生成摘要..."
-                    summary = web_summarizer.generate_simple_summary(content)
-                    yield summary
-
+                yield f"無法獲取內容: {str(e)}"
         except Exception as e2:
             logging.error(f"Fallback also failed: {e2}")
             yield f"摘要生成失敗: {str(e2)}"
@@ -136,7 +96,6 @@ if (uploaded_file is not None and
     not st.session_state.is_processing):
 
     st.session_state.is_processing = True
-    # 清除先前的摘要結果
     st.session_state.summary_output = None
 
     with st.status("正在處理 PDF...", expanded=True) as status:

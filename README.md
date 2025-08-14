@@ -8,14 +8,15 @@
 - **本地AI處理**: 使用 Ollama 模型，保護隱私安全
 - **即時顯示**: 摘要生成過程即時可見
 
-![](/Users/sydchen/projects/rag/app.png)
+![](screenshot.png)
 
 ---
 
 ## Tech Stack
 
-| **Frontend**       | [Streamlit](https://streamlit.io/)                                         |
+| Component          |                                                                            |
 | ------------------ | -------------------------------------------------------------------------- |
+| **Frontend**       | [Streamlit](https://streamlit.io/)                                         |
 | **LLM Platform**   | [Ollama](https://ollama.com/)                                              |
 | **LLM Model**      | [Google Gemma 3](https://developers.googleblog.com/en/introducing-gemma3/) |
 | **PDF Processing** | [PyPDF2](https://pypi.org/project/PyPDF2/)                                 |
