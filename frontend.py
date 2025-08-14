@@ -3,8 +3,8 @@ import logging
 import asyncio
 import sys
 import time
-from pdf_summary import PDFSummarizer
-from html_summary import WebArticleSummarizer
+from pdf_summarizer import PDFSummarizer
+from html_summarizer import WebArticleSummarizer
 
 logging.basicConfig(level=logging.INFO)
 
