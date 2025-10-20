@@ -5,6 +5,7 @@ import sys
 import time
 from pdf_summarizer import PDFSummarizer
 from html_summarizer import WebArticleSummarizer
+from youtube_summarizer import YouTubeSummarizer
 
 logging.basicConfig(level=logging.INFO)
 
@@ -16,9 +17,10 @@ def init_summarizers():
         token_limit=3000,
         overlap_ratio=0.15
     )
-    return pdf_summarizer, web_summarizer
+    youtube_summarizer = YouTubeSummarizer()
+    return pdf_summarizer, web_summarizer, youtube_summarizer
 
-pdf_summarizer, web_summarizer = init_summarizers()
+pdf_summarizer, web_summarizer, youtube_summarizer = init_summarizers()
 
 if "last_uploaded" not in st.session_state:
     st.session_state.last_uploaded = None
@@ -49,9 +51,16 @@ def stream_summary(generator, status_container, result_placeholder=None):
         return error_msg
 
 def process_url_with_fallback(url):
-    """處理 URL 摘要，包含容錯機制"""
+    """處理 URL 摘要，包含容錯機制（支援 YouTube、網頁和 PDF）"""
     try:
-        # 嘗試標準摘要流程
+        # 檢查是否為 YouTube URL
+        if youtube_summarizer.is_youtube_url(url):
+            logging.info(f"偵測到 YouTube URL: {url}")
+            for chunk in youtube_summarizer.get_summary_stream(url):
+                yield chunk
+            return
+
+        # 嘗試標準摘要流程（網頁或 PDF）
         for chunk in web_summarizer.get_summary(url):
             yield chunk
     except Exception as e:
@@ -71,7 +80,7 @@ def process_url_with_fallback(url):
             yield f"摘要生成失敗: {str(e2)}"
 
 st.title("PDF & Web Summarizer")
-st.markdown("支援 PDF 文件上傳和網頁 URL 摘要")
+st.markdown("支援 PDF 文件上傳、網頁 URL 摘要和 YouTube 影片摘要")
 
 st.header("📁 PDF 文件")
 
@@ -132,8 +141,8 @@ st.header("🌐 網頁")
 
 url_input = st.text_input(
     label="請輸入網址",
-    placeholder="https://danluu.com/car-safety/",
-    help="輸入要進行摘要的網頁網址或 PDF 連結",
+    placeholder="https://danluu.com/car-safety/ 或 https://www.youtube.com/watch?v=...",
+    help="輸入要進行摘要的網頁網址、PDF 連結或 YouTube 影片網址",
     key="url_input"
 )
 
