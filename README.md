@@ -12,11 +12,38 @@
 
 | Component          |                                                                            |
 | ------------------ | -------------------------------------------------------------------------- |
-| **Frontend**       | [Streamlit](https://streamlit.io/)                                         |
-| **LLM Platform**   | [Ollama](https://ollama.com/)                                              |
-| **LLM Model**      | [Google Gemma 3](https://developers.googleblog.com/en/introducing-gemma3/) |
-| **PDF Processing** | [PyPDF2](https://pypi.org/project/PyPDF2/)                                 |
-| **Video Pipeline** | yt-dlp, ffmpeg, whisper.cpp                                                |
+| Frontend       | [Streamlit](https://streamlit.io/)                                         |
+| LLM Platform   | [Ollama](https://ollama.com/)                                              |
+| LLM Model      | [Google Gemma 3](https://developers.googleblog.com/en/introducing-gemma3/) |
+| PDF Processing | [PyPDF2](https://pypi.org/project/PyPDF2/)                                 |
+| Video Pipeline | yt-dlp, ffmpeg, whisper.cpp                                                |
+
+---
+
+## Supported Inputs
+
+| Input | Where to use it |
+| --- | --- |
+| Uploaded PDF | Streamlit frontend |
+| Web article URL | Streamlit frontend or `html_summarizer.py` |
+| PDF URL | Streamlit frontend or `html_summarizer.py` |
+| YouTube URL | Streamlit frontend, `html_summarizer.py`, or `youtube_summarizer.py` |
+| Local video file (`.mp4`, `.mov`, `.avi`, `.mkv`, `.m4v`, `.webm`) | `youtube_summarizer.py` |
+| Transcript file (`.srt`, `.txt`) | `youtube_summarizer.py` or `transcript_llm.py` |
+
+## Scripts
+
+| Script | Purpose |
+| --- | --- |
+| `frontend.py` | Streamlit UI for PDF upload, URL summary, and YouTube summary |
+| `html_summarizer.py` | CLI for web article, PDF URL, or YouTube URL summaries |
+| `pdf_summarizer.py` | PDF extraction and summarization helper used by the service/UI |
+| `youtube_summarizer.py` | CLI for YouTube URLs, local videos, and transcript files |
+| `clean_transcript.py` | Utility for converting SRT files into cleaned plain text |
+| `transcript_llm.py` | Transcript-focused summarizer and chunking test CLI |
+| `summarizer_service.py` | Shared routing entrypoint used by the frontend |
+| `source_detection.py` | Input type detection helpers |
+| `chunking.py` | Shared document/transcript chunking helpers |
 
 ---
 
@@ -57,11 +84,66 @@ cp .env.example .env
 
 Update `.env` if you use a different Ollama model, Whisper model path, or output directory. `.env` is for local secrets and machine-specific paths only; do not commit it.
 
-### Start the Frontend (Streamlit)
+## Usage
+
+### Start the Frontend
 
 ```bash
 streamlit run frontend.py
 ```
+
+### Summarize a Web Page, PDF URL, or YouTube URL
+
+```bash
+python3 html_summarizer.py "https://example.com/article"
+python3 html_summarizer.py "https://example.com/paper.pdf" --task-type academic_paper
+python3 html_summarizer.py "https://www.youtube.com/watch?v=VIDEO_ID"
+```
+
+Available `--task-type` values:
+
+- `short_summary`
+- `long_summary`
+- `detailed_analysis`
+- `academic_paper`
+
+### Summarize YouTube, Local Video, or Transcript Files
+
+```bash
+python3 youtube_summarizer.py "https://www.youtube.com/watch?v=VIDEO_ID"
+python3 youtube_summarizer.py ./video.mp4 --lang zh
+python3 youtube_summarizer.py ./lecture.srt
+python3 youtube_summarizer.py ./notes.txt
+```
+
+For local video files, `--lang` can be `auto`, `zh`, `ja`, `en`, `ko`, or another Whisper-supported language code.
+
+### Clean an SRT Transcript
+
+```bash
+python3 clean_transcript.py lecture.srt
+python3 clean_transcript.py lecture.srt lecture_clean.txt
+python3 clean_transcript.py lecture.srt --stdout
+```
+
+By default, `clean_transcript.py lecture.srt` writes `lecture_clean.txt` next to the input file.
+
+### Summarize a Transcript Directly
+
+```bash
+python3 transcript_llm.py ./lecture.srt
+python3 transcript_llm.py ./lecture.txt --chunk-size 8000 --overlap-words 200
+```
+
+## External Tools for Video Summaries
+
+YouTube and local video summaries require these command-line tools in addition to Python dependencies:
+
+- `yt-dlp` for downloading YouTube videos
+- `ffmpeg` for extracting/converting audio
+- `whisper.cpp` for audio transcription
+
+Configure `WHISPER_MODEL_PATH` and `WHISPER_BINARY_PATH` in `.env` before running video transcription.
 
 ### Run Tests
 
