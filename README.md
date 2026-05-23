@@ -55,7 +55,7 @@ ollama serve & ollama pull gemma3:4b
 cp .env.example .env
 ```
 
-Update `.env` if you use a different Ollama model, Whisper model path, or output directory.
+Update `.env` if you use a different Ollama model, Whisper model path, or output directory. `.env` is for local secrets and machine-specific paths only; do not commit it.
 
 ### Start the Frontend (Streamlit)
 
