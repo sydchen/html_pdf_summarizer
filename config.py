@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -52,3 +53,18 @@ class Config:
         """Ensure the output directory exists"""
         os.makedirs(cls.YOUTUBE_OUTPUT_DIR, exist_ok=True)
         return cls.YOUTUBE_OUTPUT_DIR
+
+    @classmethod
+    def validate_whisper_paths(cls) -> None:
+        """Raise a clear error if whisper.cpp paths are not configured correctly."""
+        missing = []
+        if not Path(cls.WHISPER_BINARY_PATH).exists():
+            missing.append(f"WHISPER_BINARY_PATH={cls.WHISPER_BINARY_PATH}")
+        if not Path(cls.WHISPER_MODEL_PATH).exists():
+            missing.append(f"WHISPER_MODEL_PATH={cls.WHISPER_MODEL_PATH}")
+
+        if missing:
+            raise FileNotFoundError(
+                "Whisper 設定無效，請在 .env 設定正確路徑: "
+                + ", ".join(missing)
+            )

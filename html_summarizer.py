@@ -1,12 +1,18 @@
 import asyncio
+import argparse
 import httpx
 import tempfile
 import os
 import PyPDF2
-from typing import List, Dict, Generator, Optional
+import logging
+from typing import List, Generator, Optional
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse
+from chunking import estimate_token_count, split_text_by_estimated_tokens
 from llm import DocumentSummarizer
+from source_detection import is_youtube_url
+
+
+logger = logging.getLogger(__name__)
 
 class WebArticleSummarizer:
     def __init__(self,
@@ -32,7 +38,7 @@ class WebArticleSummarizer:
             "academic_paper": 6000
         }
 
-    def detect_content_type(self, url: str) -> str:
+    def detect_content_type(self, url: str) -> bool:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
@@ -42,7 +48,7 @@ class WebArticleSummarizer:
                 response = client.head(url, headers=headers, follow_redirects=True)
                 content_type = response.headers.get('content-type', '').lower()
 
-                print(content_type)
+                logger.debug("Detected content-type for %s: %s", url, content_type)
 
                 if any(pdf_type in content_type for pdf_type in [
                     'application/pdf',
@@ -57,7 +63,7 @@ class WebArticleSummarizer:
 
 
         except Exception as e:
-            print(f"Content-Type 檢測失敗: {e}")
+            logger.warning("Content-Type 檢測失敗: %s", e)
             # 如果 HEAD 請求失敗，回退到 URL 檢查
             if url.lower().endswith('.pdf'):
                 return True
@@ -193,8 +199,8 @@ class WebArticleSummarizer:
                 try:
                     os.unlink(temp_pdf_path)
                     print("臨時 PDF 文件已清理")
-                except:
-                    pass
+                except OSError as e:
+                    logger.warning("臨時 PDF 文件清理失敗: %s", e)
         else:
             return await self.fetch_html_text(url)
 
@@ -203,8 +209,7 @@ class WebArticleSummarizer:
 
     def count_tokens(self, text: str) -> int:
         """計算文字的 token 數量（使用字符估算）"""
-        # 這裡使用保守估計：3 字符 = 1 token
-        return len(text) // 3
+        return estimate_token_count(text)
 
     def count_tokens_batch(self, texts: List[str]) -> int:
         """計算文字列表的總 token 數"""
@@ -223,52 +228,7 @@ class WebArticleSummarizer:
 
     def split_text_by_tokens(self, text: str, max_tokens: int) -> List[str]:
         """將長文字按 token 數量切分成多個部分"""
-        chunks = []
-        paragraphs = text.split('\n\n')
-        current_chunk = ""
-        current_tokens = 0
-
-        for paragraph in paragraphs:
-            paragraph = paragraph.strip()
-            if not paragraph:
-                continue
-
-            para_tokens = self.count_tokens(paragraph)
-
-            # 如果單個段落就超過限制，需要進一步切分
-            if para_tokens > max_tokens:
-                if current_chunk:
-                    chunks.append(current_chunk.strip())
-                    current_chunk = ""
-                    current_tokens = 0
-
-                # 按句子切分段落
-                sentences = [s.strip() + '.' for s in paragraph.split('.') if s.strip()]
-                for sentence in sentences:
-                    sent_tokens = self.count_tokens(sentence)
-
-                    if current_tokens + sent_tokens > max_tokens:
-                        if current_chunk:
-                            chunks.append(current_chunk.strip())
-                        current_chunk = sentence
-                        current_tokens = sent_tokens
-                    else:
-                        current_chunk += " " + sentence if current_chunk else sentence
-                        current_tokens += sent_tokens
-            else:
-                if current_tokens + para_tokens > max_tokens:
-                    if current_chunk:
-                        chunks.append(current_chunk.strip())
-                    current_chunk = paragraph
-                    current_tokens = para_tokens
-                else:
-                    current_chunk += "\n\n" + paragraph if current_chunk else paragraph
-                    current_tokens += para_tokens
-
-        if current_chunk:
-            chunks.append(current_chunk.strip())
-
-        return chunks
+        return split_text_by_estimated_tokens(text, max_tokens)
 
     def split_texts_by_tokens(self, texts: List[str], max_tokens: int) -> List[List[str]]:
         """將文字列表分割成符合 token 限制的群組"""
@@ -354,6 +314,15 @@ class WebArticleSummarizer:
     def get_summary(self, url: str, task_type: str = "long_summary") -> Generator[str, None, None]:
         """獲取文件摘要（支援 HTML 和 PDF）"""
         try:
+            if is_youtube_url(url):
+                print("偵測到 YouTube URL，改用影片逐字稿摘要流程...")
+                from youtube_summarizer import YouTubeSummarizer
+
+                youtube_summarizer = YouTubeSummarizer()
+                for chunk in youtube_summarizer.get_summary_stream(url):
+                    yield chunk
+                return
+
             is_pdf = self.detect_content_type(url)
             file_type = "PDF" if is_pdf else "網頁"
             print(f"正在獲取{file_type}內容...")
@@ -406,8 +375,9 @@ class WebArticleSummarizer:
     async def fetch_content_safe(self, url: str) -> tuple[str, str]:
         """安全的內容獲取（返回內容和類型）"""
         try:
-            content_type = await self.detect_content_type(url)
-            content = await self.fetch_content(url)
+            is_pdf = self.detect_content_type(url)
+            content = await self.fetch_content(url, is_pdf)
+            content_type = "pdf" if is_pdf else "html"
             return content, content_type
         except Exception as e:
             raise Exception(f"無法獲取內容: {str(e)}")
@@ -423,11 +393,26 @@ class WebArticleSummarizer:
             return f"摘要生成失敗: {str(e)}"
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="網頁、PDF 或 YouTube 摘要工具")
+    parser.add_argument(
+        "url",
+        nargs="?",
+        default="https://lilianweng.github.io/posts/2023-06-23-agent/",
+        help="要摘要的網頁、PDF 或 YouTube URL"
+    )
+    parser.add_argument(
+        "--task-type",
+        default="long_summary",
+        choices=["short_summary", "long_summary", "detailed_analysis", "academic_paper"],
+        help="摘要任務類型，預設 long_summary"
+    )
+
+    args = parser.parse_args()
+
     summarizer = WebArticleSummarizer(
         token_limit=3000,
         overlap_ratio=0.15
     )
 
-    html_url = "https://lilianweng.github.io/posts/2023-06-23-agent/"
-    for chunk in summarizer.get_summary(html_url):
+    for chunk in summarizer.get_summary(args.url, task_type=args.task_type):
         print(chunk, end='', flush=True)

@@ -6,6 +6,11 @@ from pathlib import Path
 from typing import Generator, Optional
 from prefect import flow, task
 from config import Config
+from source_detection import (
+    is_transcript_file as detect_transcript_file,
+    is_video_file as detect_video_file,
+    is_youtube_url as detect_youtube_url,
+)
 from transcript_llm import TranscriptSummarizer
 
 
@@ -19,29 +24,17 @@ class YouTubeSummarizer:
     @staticmethod
     def is_youtube_url(url: str) -> bool:
         """Check if URL is a YouTube URL"""
-        youtube_patterns = [
-            r'(https?://)?(www\.)?youtube\.com/watch\?v=[\w-]+',
-            r'(https?://)?(www\.)?youtu\.be/[\w-]+',
-            r'(https?://)?(www\.)?youtube\.com/embed/[\w-]+',
-        ]
-        return any(re.match(pattern, url) for pattern in youtube_patterns)
+        return detect_youtube_url(url)
 
     @staticmethod
     def is_transcript_file(input_str: str) -> bool:
         """Check if input is a transcript file path"""
-        # Check if it's a file path (not a URL) and has supported extension
-        if not input_str.startswith(('http://', 'https://', 'www.')):
-            path = Path(input_str)
-            return path.suffix.lower() in ['.srt', '.txt']
-        return False
+        return detect_transcript_file(input_str)
 
     @staticmethod
     def is_video_file(input_str: str) -> bool:
         """Check if input is a local video file path"""
-        if not input_str.startswith(('http://', 'https://', 'www.')):
-            path = Path(input_str)
-            return path.suffix.lower() in ['.mp4', '.mov', '.avi', '.mkv', '.m4v', '.webm']
-        return False
+        return detect_video_file(input_str)
 
     @staticmethod
     def load_transcript_from_file(file_path: str) -> str:
@@ -106,6 +99,18 @@ class YouTubeSummarizer:
             if match:
                 return match.group(1)
         return None
+
+    @staticmethod
+    def validate_wav_file(audio_path: str) -> str:
+        """Validate that a WAV file exists and is not empty before continuing."""
+        audio_file = Path(audio_path)
+        if audio_file.suffix.lower() != ".wav":
+            raise FileNotFoundError(f"不是有效的 WAV 音訊檔案: {audio_path}")
+        if not audio_file.exists():
+            raise FileNotFoundError(f"WAV 音訊檔案不存在: {audio_path}")
+        if audio_file.stat().st_size <= 0:
+            raise FileNotFoundError(f"WAV 音訊檔案是空檔案: {audio_path}")
+        return str(audio_file)
 
     @staticmethod
     @task(retries=2, retry_delay_seconds=10, name="下載 YouTube 影片")
@@ -181,9 +186,17 @@ class YouTubeSummarizer:
 
         # 檢查快取：如果檔案已存在，直接返回
         if os.path.exists(output_path):
-            file_size = os.path.getsize(output_path)
-            print(f"使用快取的轉換音訊: {output_path} ({file_size} bytes)")
-            return output_path
+            try:
+                validated_output_path = YouTubeSummarizer.validate_wav_file(output_path)
+                file_size = os.path.getsize(validated_output_path)
+                print(f"使用快取的轉換音訊: {validated_output_path} ({file_size} bytes)")
+                return validated_output_path
+            except FileNotFoundError as e:
+                print(f"警告: 快取音訊無效，將重新轉換: {e}")
+                try:
+                    os.remove(output_path)
+                except OSError:
+                    pass
 
         print(f"正在轉換音訊格式: {input_path} -> {output_path}")
 
@@ -204,25 +217,27 @@ class YouTubeSummarizer:
                 text=True
             )
 
-            if os.path.exists(output_path):
-                file_size = os.path.getsize(output_path)
-                print(f"音訊轉換完成: {output_path} ({file_size} bytes)")
+            try:
+                validated_output_path = YouTubeSummarizer.validate_wav_file(output_path)
+            except FileNotFoundError as e:
+                raise FileNotFoundError(f"轉換後的音訊檔案無效: {e}")
 
-                # Only remove legacy intermediate audio files. Keep video
-                # inputs such as mp4 files.
-                input_file = Path(input_path)
-                if input_file.name.endswith("_original.wav"):
-                    try:
-                        if input_file.exists():
-                            input_file.unlink()
-                            print(f"已刪除原始音訊檔案: {input_path}")
-                    except Exception as e:
-                        print(f"警告: 無法刪除原始音訊檔案: {str(e)}")
-                        # Don't raise exception, conversion was successful
+            file_size = os.path.getsize(validated_output_path)
+            print(f"音訊轉換完成: {validated_output_path} ({file_size} bytes)")
 
-                return output_path
-            else:
-                raise FileNotFoundError(f"轉換後的音訊檔案不存在: {output_path}")
+            # Only remove legacy intermediate audio files. Keep video
+            # inputs such as mp4 files.
+            input_file = Path(input_path)
+            if input_file.name.endswith("_original.wav"):
+                try:
+                    if input_file.exists():
+                        input_file.unlink()
+                        print(f"已刪除原始音訊檔案: {input_path}")
+                except Exception as e:
+                    print(f"警告: 無法刪除原始音訊檔案: {str(e)}")
+                    # Don't raise exception, conversion was successful
+
+            return validated_output_path
 
         except subprocess.CalledProcessError as e:
             print(f"ffmpeg 錯誤: {e.stderr}")
@@ -318,6 +333,8 @@ class YouTubeSummarizer:
         Returns:
             Path to generated SRT file
         """
+        audio_path = YouTubeSummarizer.validate_wav_file(audio_path)
+
         # Use language-specific SRT path to avoid cache collision between languages
         if language != 'auto':
             srt_path = f"{audio_path}.{language}.srt"
@@ -334,6 +351,7 @@ class YouTubeSummarizer:
         print(f"正在轉錄音訊: {audio_path}")
         print(f"使用 Whisper 模型: {Config.WHISPER_MODEL_PATH}")
         print(f"使用語言: {language}")
+        Config.validate_whisper_paths()
 
         try:
             cmd = [
@@ -358,7 +376,8 @@ class YouTubeSummarizer:
                 text=True
             )
 
-            print(f"Whisper 輸出:\n{result.stdout}")
+            if result.stdout.strip():
+                print("Whisper 已產生逐字稿輸出")
 
             # whisper.cpp always outputs to audio_path.srt; rename to language-specific path
             if language != 'auto' and os.path.exists(whisper_default_srt):

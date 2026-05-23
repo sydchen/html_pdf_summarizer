@@ -1,0 +1,13 @@
+.DS_Store
+.env
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+test_env/
+venv/
+.venv/
+youtube_downloads/
+screenshot.png

@@ -4,6 +4,7 @@ import sys
 import re
 from pathlib import Path
 from typing import Generator
+from chunking import split_transcript_into_chunks
 
 # This script does not use Prefect. Disable Prefect telemetry in case a shared
 # environment or transitive import starts Prefect's background services.
@@ -225,36 +226,7 @@ class TranscriptSummarizer:
         Returns:
             Transcript chunks in source order
         """
-        normalized = re.sub(r"\s+", " ", transcript).strip()
-        if not normalized:
-            return []
-
-        sentences = re.split(r"(?<=[.!?])\s+", normalized)
-        chunks = []
-        current_sentences = []
-        current_length = 0
-
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if not sentence:
-                continue
-
-            sentence_length = len(sentence) + 1
-            if current_sentences and current_length + sentence_length > chunk_size:
-                current_text = " ".join(current_sentences).strip()
-                chunks.append(current_text)
-
-                overlap = " ".join(current_text.split()[-overlap_words:])
-                current_sentences = [overlap, sentence] if overlap else [sentence]
-                current_length = len(" ".join(current_sentences))
-            else:
-                current_sentences.append(sentence)
-                current_length += sentence_length
-
-        if current_sentences:
-            chunks.append(" ".join(current_sentences).strip())
-
-        return chunks
+        return split_transcript_into_chunks(transcript, chunk_size, overlap_words)
 
     def summarize_transcript_part(self, transcript: str, part_number: int, total_parts: int) -> str:
         """Generate a structured summary for one transcript chunk."""

@@ -1,7 +1,6 @@
-import requests
-import json
 import io
 import sys
+import httpx
 import PyPDF2
 from typing import Union, Callable, Optional
 from llm import DocumentSummarizer
@@ -30,7 +29,7 @@ class PDFSummarizer:
         try:
             if isinstance(source, str):
                 if source.startswith("http://") or source.startswith("https://"):
-                    response = requests.get(source)
+                    response = httpx.get(source, timeout=60.0, follow_redirects=True)
                     response.raise_for_status()
                     pdf_stream = io.BytesIO(response.content)
                 else:
@@ -157,4 +156,3 @@ class PDFSummarizer:
     def set_chunk_length(self, length: int):
         """設置文字塊的最大長度"""
         self.max_chunk_length = max(500, length)  # 最小 500 字元
-

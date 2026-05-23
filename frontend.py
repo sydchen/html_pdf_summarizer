@@ -1,26 +1,15 @@
 import streamlit as st
 import logging
-import asyncio
-import sys
-import time
-from pdf_summarizer import PDFSummarizer
-from html_summarizer import WebArticleSummarizer
-from youtube_summarizer import YouTubeSummarizer
+from summarizer_service import SummarizerService
 
 logging.basicConfig(level=logging.INFO)
 
 @st.cache_resource
-def init_summarizers():
-    """初始化摘要器（使用 cache_resource 避免重複初始化）"""
-    pdf_summarizer = PDFSummarizer(max_chunk_length=2000)
-    web_summarizer = WebArticleSummarizer(
-        token_limit=3000,
-        overlap_ratio=0.15
-    )
-    youtube_summarizer = YouTubeSummarizer()
-    return pdf_summarizer, web_summarizer, youtube_summarizer
+def init_service():
+    """初始化摘要服務（使用 cache_resource 避免重複初始化）"""
+    return SummarizerService()
 
-pdf_summarizer, web_summarizer, youtube_summarizer = init_summarizers()
+summarizer_service = init_service()
 
 if "last_uploaded" not in st.session_state:
     st.session_state.last_uploaded = None
@@ -36,11 +25,18 @@ def stream_summary(generator, status_container, result_placeholder=None):
     summary_text = ""
 
     try:
+        if isinstance(generator, str):
+            status_container.update(label=f"生成摘要中... ({len(generator)} 字元)")
+            if result_placeholder is not None:
+                result_placeholder.markdown(generator)
+            return generator
+
         for chunk in generator:
             if chunk:
                 summary_text += chunk
                 status_container.update(label=f"生成摘要中... ({len(summary_text)} 字元)")
-                result_placeholder.markdown(summary_text)
+                if result_placeholder is not None:
+                    result_placeholder.markdown(summary_text)
 
         return summary_text
 
@@ -49,35 +45,6 @@ def stream_summary(generator, status_container, result_placeholder=None):
         status_container.update(label="處理失敗", state="error")
         logging.error(f"Stream summary error: {e}")
         return error_msg
-
-def process_url_with_fallback(url):
-    """處理 URL 摘要，包含容錯機制（支援 YouTube、網頁和 PDF）"""
-    try:
-        # 檢查是否為 YouTube URL
-        if youtube_summarizer.is_youtube_url(url):
-            logging.info(f"偵測到 YouTube URL: {url}")
-            for chunk in youtube_summarizer.get_summary_stream(url):
-                yield chunk
-            return
-
-        # 嘗試標準摘要流程（網頁或 PDF）
-        for chunk in web_summarizer.get_summary(url):
-            yield chunk
-    except Exception as e:
-        logging.error(f"Standard summary failed: {e}")
-        try:
-            # 備用方案：手動獲取內容並生成簡化摘要
-            is_pdf = web_summarizer.detect_content_type(url)
-            content = web_summarizer.fetch_content_sync(url, is_pdf)
-            if content:
-                yield "正在生成摘要..."
-                summary = web_summarizer.generate_simple_summary(content)
-                yield summary
-            else:
-                yield f"無法獲取內容: {str(e)}"
-        except Exception as e2:
-            logging.error(f"Fallback also failed: {e2}")
-            yield f"摘要生成失敗: {str(e2)}"
 
 st.title("PDF & Web Summarizer")
 st.markdown("支援 PDF 文件上傳、網頁 URL 摘要和 YouTube 影片摘要")
@@ -98,42 +65,13 @@ if uploaded_file != st.session_state.last_uploaded:
     st.session_state.summary_output = None
     st.session_state.summary_type = None
 
-# 處理 PDF 摘要
-if (uploaded_file is not None and
+pending_pdf = (
+    uploaded_file is not None and
     st.session_state.summary_output is None and
     uploaded_file == st.session_state.last_uploaded and
-    not st.session_state.is_processing):
-
-    st.session_state.is_processing = True
-    st.session_state.summary_output = None
-
-    with st.status("正在處理 PDF...", expanded=True) as status:
-        def report(msg):
-            status.update(label=msg)
-
-        try:
-            summary_generator = pdf_summarizer.get_summary(
-                source=uploaded_file,
-                on_progress=report
-            )
-
-            if hasattr(summary_generator, '__iter__'):
-                summary = stream_summary(summary_generator, status, st.session_state.summary_placeholder)
-            else:
-                summary = summary_generator
-
-            st.session_state.summary_output = summary
-            st.session_state.summary_type = "PDF"
-            status.update(label="完成", state="complete")
-
-        except Exception as e:
-            error_msg = f"PDF 處理失敗: {str(e)}"
-            st.session_state.summary_output = error_msg
-            st.session_state.summary_type = "PDF"
-            status.update(label="處理失敗", state="error")
-            logging.error(f"PDF processing error: {e}")
-
-    st.session_state.is_processing = False
+    not st.session_state.is_processing
+)
+pending_url = None
 
 st.divider()
 
@@ -155,25 +93,7 @@ if st.button(
     if url_input.strip():
         st.session_state.summary_output = None
         st.session_state.summary_type = None
-        st.session_state.is_processing = True
-
-        with st.status("正在分析網頁...", expanded=True) as status:
-            try:
-                summary_generator = process_url_with_fallback(url_input.strip())
-                summary = stream_summary(summary_generator, status, st.session_state.summary_placeholder)
-
-                st.session_state.summary_output = summary
-                st.session_state.summary_type = "網頁"
-                status.update(label="完成", state="complete")
-
-            except Exception as e:
-                error_msg = f"網頁處理失敗: {str(e)}"
-                st.session_state.summary_output = error_msg
-                st.session_state.summary_type = "網頁"
-                status.update(label="處理失敗", state="error")
-                logging.error(f"URL processing error: {e}")
-
-        st.session_state.is_processing = False
+        pending_url = url_input.strip()
     else:
         st.warning("請輸入有效的網址")
 
@@ -181,8 +101,54 @@ st.divider()
 
 st.subheader("摘要結果")
 summary_result_placeholder = st.empty()
-st.session_state.summary_placeholder = summary_result_placeholder
-
 if st.session_state.summary_output:
-    st.markdown(st.session_state.summary_output)
+    summary_result_placeholder.markdown(st.session_state.summary_output)
 
+if pending_pdf:
+    st.session_state.is_processing = True
+    st.session_state.summary_output = None
+
+    with st.status("正在處理 PDF...", expanded=True) as status:
+        def report(msg):
+            status.update(label=msg)
+
+        try:
+            summary_generator = summarizer_service.summarize_upload_stream(
+                uploaded_file,
+                on_progress=report,
+            )
+            summary = stream_summary(summary_generator, status, summary_result_placeholder)
+
+            st.session_state.summary_output = summary
+            st.session_state.summary_type = "PDF"
+            status.update(label="完成", state="complete")
+
+        except Exception as e:
+            error_msg = f"PDF 處理失敗: {str(e)}"
+            st.session_state.summary_output = error_msg
+            st.session_state.summary_type = "PDF"
+            status.update(label="處理失敗", state="error")
+            logging.error(f"PDF processing error: {e}")
+
+    st.session_state.is_processing = False
+
+if pending_url:
+    st.session_state.is_processing = True
+
+    with st.status("正在分析網頁...", expanded=True) as status:
+        try:
+            summary_generator = summarizer_service.summarize_stream(pending_url)
+            summary = stream_summary(summary_generator, status, summary_result_placeholder)
+
+            st.session_state.summary_output = summary
+            st.session_state.summary_type = "網頁"
+            status.update(label="完成", state="complete")
+
+        except Exception as e:
+            error_msg = f"網頁處理失敗: {str(e)}"
+            st.session_state.summary_output = error_msg
+            st.session_state.summary_type = "網頁"
+            status.update(label="處理失敗", state="error")
+            logging.error(f"URL processing error: {e}")
+
+    st.session_state.is_processing = False
