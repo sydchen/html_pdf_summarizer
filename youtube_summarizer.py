@@ -4,6 +4,12 @@ import sys
 import subprocess
 from pathlib import Path
 from typing import Generator, Optional
+
+PROJECT_PREFECT_HOME = Path(__file__).resolve().parent / ".prefect"
+os.environ.setdefault("PREFECT_HOME", str(PROJECT_PREFECT_HOME))
+os.environ.setdefault("PREFECT_SERVER_ANALYTICS_ENABLED", "false")
+os.environ.setdefault("PREFECT_CLOUD_ENABLE_ORCHESTRATION_TELEMETRY", "false")
+
 from prefect import flow, task
 from config import Config
 from source_detection import (
@@ -588,6 +594,53 @@ class YouTubeSummarizer:
 
         return summary
 
+    def _summarize_transcript_file_direct(self, file_path: str) -> str:
+        print(f"開始處理逐字稿檔案: {file_path}")
+        transcript = self.load_transcript_from_file(file_path)
+        summary = self.summarize_transcript_task.fn(self, transcript)
+        print("逐字稿摘要流程完成")
+        return summary
+
+    def _summarize_video_file_direct(self, file_path: str, language: str = 'auto') -> str:
+        print(f"開始處理本地影片: {file_path}")
+        print(f"使用語言: {language}")
+
+        video_path = Path(file_path)
+        if not video_path.exists():
+            raise FileNotFoundError(f"影片檔案不存在: {file_path}")
+
+        video_id = video_path.stem
+        output_dir = Config.ensure_output_dir()
+        converted_audio_path = self.convert_audio_format.fn(file_path, output_dir, video_id)
+        srt_path = self.transcribe_audio.fn(converted_audio_path, language)
+        transcript = self.clean_transcript.fn(srt_path)
+        summary = self.summarize_transcript_task.fn(self, transcript)
+
+        print("本地影片摘要流程完成")
+        return summary
+
+    def _summarize_youtube_direct(self, url: str) -> str:
+        print(f"開始處理 YouTube 影片: {url}")
+
+        video_id = self.extract_video_id(url)
+        if not video_id:
+            raise ValueError(f"無法從 URL 提取影片 ID: {url}")
+
+        print(f"影片 ID: {video_id}")
+
+        output_dir = Config.ensure_output_dir()
+        print(f"輸出目錄: {output_dir}")
+
+        detected_language = self.detect_video_language.fn(url)
+        video_path = self.download_youtube_video.fn(url, output_dir, video_id)
+        converted_audio_path = self.convert_audio_format.fn(video_path, output_dir, video_id)
+        srt_path = self.transcribe_audio.fn(converted_audio_path, detected_language)
+        transcript = self.clean_transcript.fn(srt_path)
+        summary = self.summarize_transcript_task.fn(self, transcript)
+
+        print("YouTube 影片摘要流程完成")
+        return summary
+
     def get_summary(self, input_source: str, language: str = 'auto') -> str:
         """
         Get summary for YouTube video, local video, or transcript file (synchronous)
@@ -600,11 +653,11 @@ class YouTubeSummarizer:
             Summary text
         """
         if self.is_transcript_file(input_source):
-            return self.transcript_summary_flow(input_source)
+            return self._summarize_transcript_file_direct(input_source)
         elif self.is_video_file(input_source):
-            return self.video_summary_flow(input_source, language)
+            return self._summarize_video_file_direct(input_source, language)
         elif self.is_youtube_url(input_source):
-            return self.youtube_summary_flow(input_source)
+            return self._summarize_youtube_direct(input_source)
         else:
             raise ValueError(
                 f"無效的輸入: {input_source}\n"
