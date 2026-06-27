@@ -13,11 +13,21 @@ def safe_file_id(value: str) -> str:
     return re.sub(r"[^0-9A-Za-z._-]+", "_", value).strip("._-") or "media"
 
 
-def get_apple_podcast_id(url: str) -> str:
+def get_apple_podcast_filename(url: str) -> str:
     parsed_url = urlparse(url)
+    path_parts = [part for part in parsed_url.path.split("/") if part]
+    if "podcast" in path_parts:
+        podcast_index = path_parts.index("podcast")
+        if podcast_index + 1 < len(path_parts):
+            return safe_file_id(path_parts[podcast_index + 1])
+
     path_match = re.search(r"/id(\d+)", parsed_url.path)
     query_id = parse_qs(parsed_url.query).get("i", [None])[0]
     return safe_file_id(query_id or (path_match.group(1) if path_match else parsed_url.path))
+
+
+def get_apple_podcast_id(url: str) -> str:
+    return get_apple_podcast_filename(url)
 
 
 def is_apple_podcast_url(url: str) -> bool:
@@ -67,8 +77,8 @@ def transcribe_media(url: str, language: str = "auto", write_txt: bool = True) -
     print(f"輸出目錄: {output_dir}")
 
     if is_apple_podcast_url(url):
-        media_id = f"apple_podcast_{get_apple_podcast_id(url)}"
-        print(f"Apple Podcasts ID: {media_id}")
+        media_id = get_apple_podcast_filename(url)
+        print(f"Apple Podcasts filename: {media_id}")
         downloaded_path = download_media_audio(url, output_dir, media_id)
         detected_language = language
         if language == "auto":
