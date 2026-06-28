@@ -35,6 +35,40 @@ def is_apple_podcast_url(url: str) -> bool:
     return parsed_url.netloc.lower() == "podcasts.apple.com"
 
 
+def transcript_language_suffix(language: str) -> str:
+    return safe_file_id(language or "auto")
+
+
+def standard_transcript_path(output_dir: str, media_id: str, language: str) -> Path:
+    return Path(output_dir) / f"{media_id}.{transcript_language_suffix(language)}.srt"
+
+
+def normalize_transcript_filename(srt_path: str, output_dir: str, media_id: str, language: str) -> str:
+    source_path = Path(srt_path)
+    target_path = standard_transcript_path(output_dir, media_id, language)
+
+    if source_path == target_path:
+        return str(target_path)
+    if target_path.exists():
+        print(f"使用標準命名的逐字稿: {target_path} ({target_path.stat().st_size} bytes)")
+        return str(target_path)
+
+    source_path.replace(target_path)
+    print(f"逐字稿重新命名: {source_path} -> {target_path}")
+    return str(target_path)
+
+
+def cleanup_source_audio(downloaded_path: str, keep_source_audio: bool = False) -> None:
+    source_path = Path(downloaded_path)
+    if keep_source_audio or source_path.suffix.lower() != ".mp3":
+        return
+    try:
+        source_path.unlink()
+        print(f"已刪除原始 MP3: {source_path}")
+    except FileNotFoundError:
+        return
+
+
 def download_media_audio(url: str, output_dir: str, media_id: str) -> str:
     output_path = Path(output_dir) / f"{media_id}.%(ext)s"
     expected_files = sorted(Path(output_dir).glob(f"{media_id}.*"))
@@ -70,7 +104,12 @@ def download_media_audio(url: str, output_dir: str, media_id: str) -> str:
     raise FileNotFoundError(f"下載的媒體檔案不存在: {output_path}")
 
 
-def transcribe_media(url: str, language: str = "auto", write_txt: bool = True) -> str:
+def transcribe_media(
+    url: str,
+    language: str = "auto",
+    write_txt: bool = True,
+    keep_source_audio: bool = False,
+) -> str:
     summarizer = YouTubeSummarizer()
 
     output_dir = Config.ensure_output_dir()
@@ -99,7 +138,14 @@ def transcribe_media(url: str, language: str = "auto", write_txt: bool = True) -
             print(f"使用指定語言: {detected_language}")
 
     audio_path = summarizer.convert_audio_format.fn(downloaded_path, output_dir, media_id)
-    srt_path = summarizer.transcribe_audio.fn(audio_path, detected_language)
+    cleanup_source_audio(downloaded_path, keep_source_audio=keep_source_audio)
+    standard_srt_path = standard_transcript_path(output_dir, media_id, detected_language)
+    if standard_srt_path.exists():
+        srt_path = str(standard_srt_path)
+        print(f"使用快取的逐字稿: {standard_srt_path} ({standard_srt_path.stat().st_size} bytes)")
+    else:
+        srt_path = summarizer.transcribe_audio.fn(audio_path, detected_language)
+        srt_path = normalize_transcript_filename(srt_path, output_dir, media_id, detected_language)
 
     print(f"SRT 逐字稿: {srt_path}")
 
@@ -112,8 +158,18 @@ def transcribe_media(url: str, language: str = "auto", write_txt: bool = True) -
     return srt_path
 
 
-def transcribe_youtube(url: str, language: str = "auto", write_txt: bool = True) -> str:
-    return transcribe_media(url, language=language, write_txt=write_txt)
+def transcribe_youtube(
+    url: str,
+    language: str = "auto",
+    write_txt: bool = True,
+    keep_source_audio: bool = False,
+) -> str:
+    return transcribe_media(
+        url,
+        language=language,
+        write_txt=write_txt,
+        keep_source_audio=keep_source_audio,
+    )
 
 
 def main() -> int:
@@ -126,6 +182,7 @@ def main() -> int:
             "  python transcriber.py https://www.youtube.com/watch?v=VIDEO_ID --lang en\n"
             "  python transcriber.py https://podcasts.apple.com/tw/podcast/.../id123456789?i=987654321\n"
             "  python transcriber.py https://www.youtube.com/watch?v=VIDEO_ID --no-txt\n"
+            "  python transcriber.py https://podcasts.apple.com/tw/podcast/.../id123456789?i=987654321 --keep-source-audio\n"
         ),
     )
     parser.add_argument("url", help="YouTube 或 Apple Podcasts URL")
@@ -140,11 +197,21 @@ def main() -> int:
         action="store_true",
         help="只輸出 SRT，不另外輸出清理後的 TXT。",
     )
+    parser.add_argument(
+        "--keep-source-audio",
+        action="store_true",
+        help="保留 yt-dlp 下載的原始音訊檔。預設會在轉成 WAV 後刪除 MP3。",
+    )
 
     args = parser.parse_args()
 
     try:
-        transcribe_media(args.url, language=args.lang, write_txt=not args.no_txt)
+        transcribe_media(
+            args.url,
+            language=args.lang,
+            write_txt=not args.no_txt,
+            keep_source_audio=args.keep_source_audio,
+        )
         return 0
     except Exception as exc:
         print(f"錯誤: {exc}", file=sys.stderr)
